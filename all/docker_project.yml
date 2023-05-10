@@ -1,0 +1,197 @@
+- name: install docker
+  hosts: _development
+  gather_facts: No
+  any_errors_fatal: true
+  become: true #sudo
+  tasks:
+    - name: update all packages
+      ansible.builtin.yum:
+        name: '*'
+        state: latest
+    # yum-utils is a collection of tools and programs for managing yum repositories, installing debug packages, source packages, extended information from repositories and administration.
+    - name: yum utils
+      ansible.builtin.yum:
+        name: "yum-utils"
+        state: latest
+    # we may need to uninstall any existing docker files first.
+    - name: uninstall old docker
+      ansible.builtin.yum:
+        name:
+          - docker
+          - docker-client
+          - docker-client-latest
+          - docker-common
+          - docker-latest
+          - docker-latest-logrotate
+          - docker-logrotate
+          - docker-engine
+        state: removed
+    # set up the repository (`yum_repository` module also kullanılabilir.)
+    - name: Add docker repo
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/centos/docker-ce.repo
+        dest: /etc/yum.repos.d/docker-ce.repo
+    - name:
+      ansible.builtin.package:
+        name: docker-ce
+        state: latest
+    - name: Add user
+      ansible.builtin.user:
+        name: ec2-user
+        groups:
+          - docker
+        append: yes
+    - name: Start Docker Service
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
+
+- name: Postgre Database configuration
+  hosts: _ansible_postgresql
+  become: true
+  gather_facts: No
+  any_errors_fatal: true
+  vars_files:
+    - secret.yml
+  vars:
+    container_path: /home/ec2-user/postgresql
+    container_name: cla_postgre
+    image_name: clarusway/postgre
+  tasks:
+    - name:
+      ansible.builtin.copy:
+        src: /home/ec2-user/ansible-project/postgres/
+        dest: "{{ container_path }}"
+
+    - name: remove "{{ container_name }}" container
+      community.docker.docker_container:
+        name: cla_postgre
+        state: absent
+        force_kill: true
+
+    - name: remove "{{ container_name }}" image
+      community.docker.docker_image:
+        name: clarusway/postgre
+        state: absent
+
+    - name: build container image
+      community.docker.docker_image:
+        name: "{{ image_name }}"
+        build:
+          path: "{{ container_path }}"
+        source: build
+        state: present
+      register: image_info
+
+    - name: print image info
+      ansible.builtin.debug:
+        var: image_info
+
+    - name: Launch postgres docker container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ image_name }}"
+        state: started
+        ports:
+        - "5432:5432"
+        env:
+          POSTGRES_PASSWORD: "{{ password }}"
+        volumes:
+          - /db-data:/var/lib/postgres/data
+      register: container_info
+
+- name: Nodejs server Configuration
+  gather_facts: No
+  any_errors_fatal: true
+  hosts: _ansible_nodejs
+  become: true
+  vars: 
+    container_path: /home/ec2-user/nodejs
+    container_name: cla_nodejs
+    image_name: clarusway/nodejs
+
+  tasks:
+    - name: copy files to the nodejs node
+      ansible.builtin.copy:
+        src: /home/ec2-user/ansible-project/nodejs/
+        dest: "{{ container_path }}"
+
+    - name: build nodejs container image
+      community.docker.docker_image:
+        name: "{{ image_name }}"
+        build:
+          path: "{{container_path}}"
+        source: build
+        state: present
+      register: image_info 
+    
+    - name: print the image info
+      ansible.builtin.debug:
+        var: image_info
+    
+    - name: Launch nodejs docker container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ image_name }}"
+        state: started
+        ports:
+        - "5000:5000"
+      register: container_info
+    
+    - name: print the container info
+      ansible.builtin.debug:
+        var: container_info
+        
+- name: Install react image
+  gather_facts: No
+  any_errors_fatal: true
+  hosts: _ansible_react
+  become: true
+  vars:
+    container_path: /home/ec2-user/react
+    container_name: cla_react
+    image_name: clarusway/react
+  tasks:
+    # at this point do not forget change DB_HOST env variable for postgresql node
+    - name: copy files to the nodejs node
+      copy:
+        src: /home/ec2-user/ansible-project/react/
+        dest: "{{ container_path }}"
+
+    - name: copy the Dockerfile
+      copy:
+        src: /home/ec2-user/ansible-project/react/Dockerfile
+        dest: /home/ec2-user/react
+    
+    - name: remove {{ container_name }} container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+        force_kill: true
+
+    - name: remove "{{ image_name }}" image
+      community.docker.docker_image:
+        name: "{{ image_name }}"
+        state: absent
+        
+    - name: build react container image
+      docker_image:
+        name: "{{ image_name }}"
+        build:
+          path: "{{  container_path }}"
+        source: build
+        state: present
+    
+    - name: Launch react docker container
+      docker_container:
+        name: "{{ container_name }}"
+        image: "{{ image_name }}"
+        state: started
+        ports:
+        - "3000:3000"
+      register: container_info
+    
+    - name: Print the container_info
+      ansible.builtin.debug:
+        msg: "{{ container_info }}"
